@@ -59,13 +59,6 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-
-async def init_db():
-    async with engine.begin() as conn:
-        # создаём все таблицы из моделей
-        await conn.run_sync(Base.metadata.create_all)
-
-
 app = FastAPI(lifespan=lifespan)
 add_pagination(app)
 
