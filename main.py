@@ -9,7 +9,7 @@ from fastapi_pagination import Params
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.orm import sessionmaker, selectinload, joinedload, declarative_base, relationship
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, DateTime, func, Index
+from sqlalchemy import Column, String, Integer, Boolean, ForeignKey, DateTime, func, Index, text
 from pydantic import BaseModel, ConfigDict, Field, constr
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
@@ -55,6 +55,12 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
+
+
+async def init_db():
+    async with engine.begin() as conn:
+        # создаём все таблицы из моделей
+        await conn.run_sync(Base.metadata.create_all)
 
 
 app = FastAPI(lifespan=lifespan)
