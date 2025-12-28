@@ -18,9 +18,11 @@ from passlib.context import CryptContext
 from abc import ABC, abstractmethod
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
+from sqlalchemy.sql.functions import current_user
 from starlette import status
 from contextlib import asynccontextmanager
 from sqlalchemy.future import select
+from sqlalchemy.exc import IntegrityError
 
 SECRET_KEY = os.getenv("SECRET_KEY", 'my_secret_key')
 ALGORITHM = "HS256"
@@ -55,9 +57,12 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
+
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
 
 app = FastAPI(lifespan=lifespan)
 add_pagination(app)
@@ -65,21 +70,13 @@ add_pagination(app)
 
 async def get_db():
     async with async_factory() as db:
-        try:
-            yield db
-        except:
-            await db.rollback()
-            raise
-        finally:
-            await db.close()
+        yield db
 
 
 class Utils:
     @staticmethod
     def password_hash(password: str):
-        # Принудительно ограничиваем до 72 байт перед тем, как отдать в bcrypt
-        safe_password = password.encode("utf-8")[:72].decode("utf-8", "ignore")
-        return pwd_context.hash(safe_password)
+        return pwd_context.hash(password)
 
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -587,28 +584,27 @@ class ProjectService(BaseService, CreateService):
 
 @app.post("/users/register", response_model=UserSimpleOut)
 async def register(user: CreateUser, db: AsyncSession = Depends(get_db)):
-    logger.info("START REGISTER")
     try:
-        # 1. ПЕРЕДАЕМ ТОЛЬКО СТРОКУ ПАРОЛЯ, А НЕ ВЕСЬ ОБЪЕКТ user
-        # Проверьте, чтобы тут было user.password
-
         auth = AuthService(db)
-        # 2. ПЕРЕДАЕМ ПРОВЕРЕННУЮ СТРОКУ
-        new_user = await auth.register_user(
+        return await auth.register_user(
             username=user.username,
             password=user.password,
             email=user.email
         )
 
-        logger.info(f"REGISTER SUCCESS: {new_user.username}")
-        return new_user
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="User with this email or username already exists"
+        )
 
-    except ValueError as e:
-        # Именно сюда прилетает ошибка про 72 байта
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"SYSTEM ERROR: {repr(e)}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+    except HTTPException:
+        raise
+
+    except Exception:
+        logger.exception("REGISTER SYSTEM ERROR")
+        raise HTTPException(status_code=500)
 
 
 @app.post("/users/login", response_model=TokenResponse, dependencies=[Depends(RateLimiter(times=5, seconds=60))])
@@ -662,9 +658,13 @@ async def logout(data: RefreshToken, db: AsyncSession = Depends(get_db)):
 
 
 @app.get('/projects', response_model=Page[ProjectOut])
-async def read_projects(db: AsyncSession = Depends(get_db),
-                        projects_filter: ProjectFilter = Depends(ProjectFilter), params: Params = Depends()):
-    service = ProjectService(db)
+async def read_projects(
+        db: AsyncSession = Depends(get_db),
+        projects_filter: ProjectFilter = Depends(ProjectFilter),
+        params: Params = Depends(),
+        current_user: User = Depends(get_current_user)  # <-- вот так
+):
+    service = ProjectService(db, current_user=current_user)
     projects = await service.get(projects_filter, params)
     return projects
 
@@ -677,10 +677,14 @@ async def read_project(project_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @app.post('/projects', response_model=ProjectOut)
-async def create_project(project: CreateProject, db: AsyncSession = Depends(get_db)):
-    service = ProjectService(db)
-    project = await service.create(project)
-    return project
+async def create_project(
+        project: CreateProject,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user)
+):
+    service = ProjectService(db, current_user=current_user)
+    new_project = await service.create(project)
+    return new_project
 
 
 @app.put('/projects/{project_id}', response_model=ProjectOut)
