@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 import uuid
 from unittest.mock import patch
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from main import app
 from asgi_lifespan import LifespanManager
 
@@ -14,8 +14,8 @@ async def mock_rate_limiter_call(self, request, response):
 @pytest.fixture(autouse=True)
 def disable_rate_limiter():
     with patch(
-            "fastapi_limiter.depends.RateLimiter.__call__",
-            new=mock_rate_limiter_call
+        "fastapi_limiter.depends.RateLimiter.__call__",
+        new=mock_rate_limiter_call
     ):
         yield
 
@@ -24,7 +24,8 @@ def disable_rate_limiter():
 async def client():
     # LifespanManager запускает lifespan FastAPI (init_db, Redis limiter)
     async with LifespanManager(app):
-        async with AsyncClient(app=app, base_url="http://test") as ac:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
 
 
@@ -85,10 +86,11 @@ async def test_login_user(client, registered_user):
 async def test_register_login_refresh():
     # Патчим Utils (отключаем хэш и верификацию) и RateLimiter
     with patch("main.Utils.password_hash", side_effect=lambda x: x), \
-            patch("main.Utils.verify_password", side_effect=lambda x, y: x == y), \
-            patch("fastapi_limiter.depends.RateLimiter.__call__", new=mock_rate_limiter_call):
+         patch("main.Utils.verify_password", side_effect=lambda x, y: x == y), \
+         patch("fastapi_limiter.depends.RateLimiter.__call__", new=mock_rate_limiter_call):
         async with LifespanManager(app):
-            async with AsyncClient(app=app, base_url="http://test") as ac:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
                 username = f"user_{uuid.uuid4().hex[:6]}"
                 email = f"{username}@example.com"
                 password = "StrongPassword123!"
@@ -127,10 +129,11 @@ async def test_register_login_refresh():
 @pytest.mark.asyncio
 async def test_register_login_refresh_logout():
     with patch("main.Utils.password_hash", side_effect=lambda x: x), \
-            patch("main.Utils.verify_password", side_effect=lambda x, y: x == y), \
-            patch("fastapi_limiter.depends.RateLimiter.__call__", new=mock_rate_limiter_call):
+         patch("main.Utils.verify_password", side_effect=lambda x, y: x == y), \
+         patch("fastapi_limiter.depends.RateLimiter.__call__", new=mock_rate_limiter_call):
         async with LifespanManager(app):
-            async with AsyncClient(app=app, base_url="http://test") as ac:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as ac:
                 username = f"user_{uuid.uuid4().hex[:6]}"
                 email = f"{username}@example.com"
                 password = "StrongPassword123!"
